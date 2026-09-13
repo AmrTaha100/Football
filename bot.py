@@ -14,7 +14,7 @@ with open("players.json", "r", encoding="utf-8") as f:
 
 SCORES_FILE = "scores.json"
 
-# تحميل بيانات النقاط أو إنشاء ملف جديد
+# تحميل بيانات النقاط
 if os.path.exists(SCORES_FILE):
     try:
         with open(SCORES_FILE, "r", encoding="utf-8") as f:
@@ -26,17 +26,17 @@ else:
 
 
 def save_scores():
-    """حفظ النتائج في ملف محلي لضمان بقائها."""
+    """حفظ دائم للنقاط والإحصائيات."""
     with open(SCORES_FILE, "w", encoding="utf-8") as f:
         json.dump(scores, f, ensure_ascii=False, indent=2)
 
 
-# ألعاب الجلسة الحالية
+# ألعاب الجلسات الحالية: chat_id -> game_state
 games = {}
 
 
 def normalize_arabic(text):
-    """تنظيف وتوحيد الحروف العربية والمسافات لتفادي أخطاء الإملاء."""
+    """تنظيف وتوحيد الأحرف العربية والهمزات."""
     if not text:
         return ""
     text = text.lower().strip()
@@ -47,17 +47,35 @@ def normalize_arabic(text):
     return text
 
 
+def get_rank(points):
+    """تحديد الرتبة الكروية حسب النقاط."""
+    if points >= 100:
+        return "أسطورة كرة القدم 👑"
+    if points >= 60:
+        return "نجم عالمي 🌟"
+    if points >= 30:
+        return "لاعب محترف ⚽"
+    if points >= 10:
+        return "موهبة صاعدة ⚡"
+    return "لاعب هاوٍ 🥉"
+
+
 def get_game_markup():
+    """لوحة أزرار التفاعل أثناء الجولة."""
     markup = InlineKeyboardMarkup()
     markup.row(
         InlineKeyboardButton("💡 تلميح إضافي", callback_data="next_hint"),
-        InlineKeyboardButton("🏳️ استسلام", callback_data="give_up"),
+        InlineKeyboardButton("🔤 أول حرف", callback_data="reveal_letter"),
     )
-    markup.row(InlineKeyboardButton("🔄 لاعب جديد", callback_data="new_game"))
+    markup.row(
+        InlineKeyboardButton("🏳️ استسلام", callback_data="give_up"),
+        InlineKeyboardButton("🔄 لاعب جديد", callback_data="new_game"),
+    )
     return markup
 
 
 def get_next_game_markup():
+    """زر سريع لبدء جولة جديدة فوراً."""
     markup = InlineKeyboardMarkup()
     markup.row(
         InlineKeyboardButton("⚽ لاعب جديد", callback_data="new_game")
@@ -65,29 +83,54 @@ def get_next_game_markup():
     return markup
 
 
+def pick_player_for_user(user_id):
+    """اختيار لاعب لم يظهر للمستخدم مؤخراً لمنع التكرار."""
+    played = scores.get(user_id, {}).get("played_players", [])
+    available = [p for p in PLAYERS if p["name"] not in played]
+
+    # إذا أنهى اللاعب جميع الأسئلة، نعيد تصفير السجل
+    if not available:
+        available = PLAYERS
+        if user_id in scores:
+            scores[user_id]["played_players"] = []
+            save_scores()
+
+    return random.choice(available)
+
+
 @bot.message_handler(commands=["start", "play"])
 def start_game(message):
-    user_id = str(message.chat.id)
-    player = random.choice(PLAYERS)
-    games[user_id] = {"player": player, "hint_index": 0}
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
 
-    # تهيئة بيانات المستخدم إن لم تكن موجودة
+    # تهيئة بيانات اللاعب في الإحصائيات
     if user_id not in scores:
-        user_name = message.from_user.first_name or "لاعب"
         scores[user_id] = {
-            "name": user_name,
+            "name": message.from_user.first_name or "لاعب",
             "points": 0,
             "wins": 0,
             "streak": 0,
             "best_streak": 0,
+            "played_players": [],
         }
         save_scores()
 
+    player = pick_player_for_user(user_id)
+
+    # تسجيل حالة الجولة
+    games[chat_id] = {
+        "player": player,
+        "hint_index": 0,
+        "attempts_left": 3,
+        "letter_revealed": False,
+    }
+
     text = (
-        f"⚽ <b>لعبة خمّن اللاعب!</b>\n\n"
+        f"⚽ <b>لعبة خمّن اللاعب!</b>\n"
+        f"❤️ <b>المحاولات:</b> 3 فرَص\n\n"
         f"🎯 <b>التحدي الأول (3 نقاط ⭐):</b>\n"
         f"{player['hints'][0]}\n\n"
-        f"خمن اسمه في رسالة أو اطلب تلميحاً إضافياً بالأسفل 👇"
+        f"اكتب اسم اللاعب في رسالة أو اطلب تلميحاً من الأزرار 👇"
     )
     bot.send_message(
         message.chat.id, text, parse_mode="HTML", reply_markup=get_game_markup()
@@ -96,14 +139,16 @@ def start_game(message):
 
 @bot.message_handler(commands=["stats"])
 def show_stats(message):
-    user_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
     if user_id not in scores:
         bot.reply_to(message, "لم تلعب أي جولة بعد! اكتب /play للبدء.")
         return
 
     data = scores[user_id]
+    rank = get_rank(data.get("points", 0))
     text = (
-        f"📊 <b>إحصائياتك يا {data.get('name', 'بطل')}:</b>\n\n"
+        f"📊 <b>إحصائيات الكابتن {data.get('name', 'بطل')}:</b>\n\n"
+        f"🎖️ <b>الرتبة:</b> {rank}\n"
         f"⭐ <b>مجموع النقاط:</b> {data.get('points', 0)}\n"
         f"🏆 <b>عدد مرات الفوز:</b> {data.get('wins', 0)}\n"
         f"🔥 <b>السلسلة الحالية (Streak):</b> {data.get('streak', 0)}\n"
@@ -115,7 +160,7 @@ def show_stats(message):
 @bot.message_handler(commands=["top"])
 def show_leaderboard(message):
     if not scores:
-        bot.reply_to(message, "لا توجد نتائج مسجلة حتى الآن!")
+        bot.reply_to(message, "لا توجد نتائج مسجلة بعد!")
         return
 
     sorted_players = sorted(
@@ -123,31 +168,36 @@ def show_leaderboard(message):
     )[:5]
 
     medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-    text = "🏆 <b>لوحة المتصدرين:</b>\n\n"
+    text = "🏆 <b>لوحة أساطير اللعبة:</b>\n\n"
 
     for i, p in enumerate(sorted_players):
         medal = medals[i] if i < len(medals) else "▫️"
-        text += f"{medal} <b>{p.get('name', 'لاعب')}</b>: {p.get('points', 0)} نقطة ({p.get('wins', 0)} فوز)\n"
+        rank = get_rank(p.get("points", 0))
+        text += (
+            f"{medal} <b>{p.get('name', 'لاعب')}</b>: {p.get('points', 0)} نقطة\n"
+            f"   └ <i>{rank}</i> ({p.get('wins', 0)} فوز)\n"
+        )
 
     bot.send_message(message.chat.id, text, parse_mode="HTML")
 
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
-    user_id = str(call.message.chat.id)
+    chat_id = str(call.message.chat.id)
+    user_id = str(call.from_user.id)
 
     if call.data == "new_game":
         bot.answer_callback_query(call.id)
         start_game(call.message)
         return
 
-    if user_id not in games:
+    if chat_id not in games:
         bot.answer_callback_query(
             call.id, "الجولة انتهت، اضغط لاعب جديد بالأسفل.", show_alert=True
         )
         return
 
-    game = games[user_id]
+    game = games[chat_id]
     player = game["player"]
 
     if call.data == "next_hint":
@@ -158,14 +208,30 @@ def handle_callbacks(call):
             hint = player["hints"][game["hint_index"]]
             pts_label = points_map.get(game["hint_index"], "")
             bot.send_message(
-                int(user_id),
+                call.message.chat.id,
                 f"💡 <b>تلميح إضافي ({pts_label}):</b>\n{hint}",
                 parse_mode="HTML",
             )
         else:
             bot.send_message(
-                int(user_id), "⚠️ استنفدت جميع التلميحات! خمن الآن."
+                call.message.chat.id, "⚠️ استنفدت جميع التلميحات! حاول التخمين الآن."
             )
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "reveal_letter":
+        if game.get("letter_revealed"):
+            bot.answer_callback_query(
+                call.id, "تم كشف الحرف الأول بالفعل!", show_alert=True
+            )
+            return
+
+        game["letter_revealed"] = True
+        first_letter = player["name"].strip()[0]
+        bot.send_message(
+            call.message.chat.id,
+            f"🔤 <b>مساعدة سريعة:</b> يبدأ اسم اللاعب بحرف: ( <b>{first_letter}</b> )",
+            parse_mode="HTML",
+        )
         bot.answer_callback_query(call.id)
 
     elif call.data == "give_up":
@@ -174,19 +240,21 @@ def handle_callbacks(call):
             save_scores()
 
         bot.send_message(
-            int(user_id),
+            call.message.chat.id,
             f"اللاعب كان: <b>{player['name']}</b> 😅\nانقطعت سلسلة الانتصارات!\nاضغط بالأسفل لجولة جديدة 👇",
             parse_mode="HTML",
             reply_markup=get_next_game_markup(),
         )
-        del games[user_id]
+        del games[chat_id]
         bot.answer_callback_query(call.id)
 
 
 @bot.message_handler(func=lambda msg: True)
 def check_guess(message):
-    user_id = str(message.chat.id)
-    if user_id not in games:
+    chat_id = str(message.chat.id)
+    user_id = str(message.from_user.id)
+
+    if chat_id not in games:
         bot.reply_to(
             message,
             "لا توجد جولة نشطة حالياً! اضغط بالأسفل للبدء 👇",
@@ -194,10 +262,10 @@ def check_guess(message):
         )
         return
 
-    raw_guess = message.text
-    user_guess = normalize_arabic(raw_guess)
-    player = games[user_id]["player"]
+    game = games[chat_id]
+    player = game["player"]
 
+    user_guess = normalize_arabic(message.text)
     full_name = normalize_arabic(player["name"])
     name_parts = full_name.split()
     aliases = [normalize_arabic(a) for a in player.get("aliases", [])]
@@ -211,11 +279,17 @@ def check_guess(message):
                 break
 
     if is_correct:
-        hints_used = games[user_id]["hint_index"] + 1
+        hints_used = game["hint_index"] + 1
         earned_points = 4 - hints_used
+
+        # خصم نقطة إذا استعان بكشف الحرف الأول
+        if game.get("letter_revealed"):
+            earned_points -= 1
+
         if earned_points < 1:
             earned_points = 1
 
+        # تسجيل وتحديث ملف اللاعب
         if user_id not in scores:
             scores[user_id] = {
                 "name": message.from_user.first_name or "لاعب",
@@ -223,6 +297,7 @@ def check_guess(message):
                 "wins": 0,
                 "streak": 0,
                 "best_streak": 0,
+                "played_players": [],
             }
 
         user_data = scores[user_id]
@@ -235,19 +310,26 @@ def check_guess(message):
         if user_data["streak"] > user_data.get("best_streak", 0):
             user_data["best_streak"] = user_data["streak"]
 
+        if "played_players" not in user_data:
+            user_data["played_players"] = []
+        user_data["played_players"].append(player["name"])
+
         save_scores()
 
+        current_rank = get_rank(user_data["points"])
         streak_text = (
             f"\n🔥 <b>السلسلة الحالية:</b> {user_data['streak']} فوز متتالي!"
             if user_data["streak"] > 1
             else ""
         )
+
         response_text = (
-            f"🎉 <b>إجابة صحيحة وممتازة!</b>\n"
-            f"اللاعب هو بالفعل <b>{player['name']}</b>\n\n"
+            f"🎉 <b>إجابة صحيحة يا {message.from_user.first_name}!</b>\n"
+            f"اللاعب هو بالفعل <b>{player['name']}</b> 👏\n\n"
             f"⭐ <b>النقاط المكتسبة:</b> +{earned_points}\n"
-            f"📊 <b>إجمالي نقاطك:</b> {user_data['points']}{streak_text}\n\n"
-            f"اضغط على الزر بالأسفل لجولة جديدة مباشرة 👇"
+            f"📊 <b>رصيدك:</b> {user_data['points']} نقطة | <i>{current_rank}</i>"
+            f"{streak_text}\n\n"
+            f"اضغط بالأسفل لجولة جديدة مباشرة 👇"
         )
         bot.reply_to(
             message,
@@ -255,11 +337,35 @@ def check_guess(message):
             parse_mode="HTML",
             reply_markup=get_next_game_markup(),
         )
-        del games[user_id]
+        del games[chat_id]
+
     else:
-        bot.reply_to(message, "❌ إجابة خاطئة! حاول مجدداً أو اطلب تلميحاً.")
+        # تقليل عدد المحاولات المتبقية
+        game["attempts_left"] -= 1
+
+        if game["attempts_left"] > 0:
+            hearts = "❤️" * game["attempts_left"]
+            bot.reply_to(
+                message,
+                f"❌ <b>إجابة خاطئة!</b>\nالمحاولات المتبقية: {hearts} ({game['attempts_left']})\nحاول مجدداً أو اطلب تلميحاً.",
+                parse_mode="HTML",
+            )
+        else:
+            if user_id in scores:
+                scores[user_id]["streak"] = 0
+                save_scores()
+
+            bot.reply_to(
+                message,
+                f"💀 <b>انتهت جميع محاولاتك!</b>\n"
+                f"اللاعب كان: <b>{player['name']}</b> 💔\n\n"
+                f"اضغط على الزر بالأسفل لتحدي جديد 👇",
+                parse_mode="HTML",
+                reply_markup=get_next_game_markup(),
+            )
+            del games[chat_id]
 
 
 if __name__ == "__main__":
-    print("Bot is running with enhanced hints...")
+    print("Bot is fully upgraded and running...")
     bot.infinity_polling()
