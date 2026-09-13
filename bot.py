@@ -1,12 +1,17 @@
+import io
 import json
 import os
 import random
 import re
+from groq import Groq
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
 bot = telebot.TeleBot(BOT_TOKEN)
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # تحميل قائمة اللاعبين
 with open("players.json", "r", encoding="utf-8") as f:
@@ -31,7 +36,7 @@ def save_scores():
         json.dump(scores, f, ensure_ascii=False, indent=2)
 
 
-# ألعاب الجلسات الحالية: chat_id -> game_state
+# ألعاب الجلسات الحالية
 games = {}
 
 
@@ -61,7 +66,6 @@ def get_rank(points):
 
 
 def get_game_markup():
-    """لوحة أزرار التفاعل أثناء الجولة."""
     markup = InlineKeyboardMarkup()
     markup.row(
         InlineKeyboardButton("💡 تلميح إضافي", callback_data="next_hint"),
@@ -75,7 +79,6 @@ def get_game_markup():
 
 
 def get_next_game_markup():
-    """زر سريع لبدء جولة جديدة فوراً."""
     markup = InlineKeyboardMarkup()
     markup.row(
         InlineKeyboardButton("⚽ لاعب جديد", callback_data="new_game")
@@ -88,7 +91,6 @@ def pick_player_for_user(user_id):
     played = scores.get(user_id, {}).get("played_players", [])
     available = [p for p in PLAYERS if p["name"] not in played]
 
-    # إذا أنهى اللاعب جميع الأسئلة، نعيد تصفير السجل
     if not available:
         available = PLAYERS
         if user_id in scores:
@@ -103,7 +105,6 @@ def start_game(message):
     chat_id = str(message.chat.id)
     user_id = str(message.from_user.id)
 
-    # تهيئة بيانات اللاعب في الإحصائيات
     if user_id not in scores:
         scores[user_id] = {
             "name": message.from_user.first_name or "لاعب",
@@ -117,7 +118,6 @@ def start_game(message):
 
     player = pick_player_for_user(user_id)
 
-    # تسجيل حالة الجولة
     games[chat_id] = {
         "player": player,
         "hint_index": 0,
@@ -130,7 +130,7 @@ def start_game(message):
         f"❤️ <b>المحاولات:</b> 3 فرَص\n\n"
         f"🎯 <b>التحدي الأول (3 نقاط ⭐):</b>\n"
         f"{player['hints'][0]}\n\n"
-        f"اكتب اسم اللاعب في رسالة أو اطلب تلميحاً من الأزرار 👇"
+        f"💬 اكتب اسمه أو <b>أرسل رسالة صوتية (Voice)</b> بالإجابة 🎙️"
     )
     bot.send_message(
         message.chat.id, text, parse_mode="HTML", reply_markup=get_game_markup()
@@ -229,7 +229,7 @@ def handle_callbacks(call):
         first_letter = player["name"].strip()[0]
         bot.send_message(
             call.message.chat.id,
-            f"🔤 <b>مساعدة سريعة:</b> يبدأ اسم اللاعب بحرف: ( <b>{first_letter}</b> )",
+            f"🔤 <b>مساعدة:</b> يبدأ اسم اللاعب بحرف: ( <b>{first_letter}</b> )",
             parse_mode="HTML",
         )
         bot.answer_callback_query(call.id)
@@ -247,6 +247,64 @@ def handle_callbacks(call):
         )
         del games[chat_id]
         bot.answer_callback_query(call.id)
+
+
+@bot.message_handler(content_types=["voice"])
+def handle_voice_guess(message):
+    """استقبال الفويس نوت وتحليله بـ Groq Whisper."""
+    chat_id = str(message.chat.id)
+
+    if chat_id not in games:
+        bot.reply_to(
+            message,
+            "لا توجد جولة نشطة حالياً! اضغط بالأسفل للبدء 👇",
+            reply_markup=get_next_game_markup(),
+        )
+        return
+
+    if not groq_client:
+        bot.reply_to(
+            message,
+            "⚠️ مفتاح Groq غير متوفر بالسيرفر. يرجى كتابة الاسم نصياً.",
+        )
+        return
+
+    try:
+        bot.send_chat_action(message.chat.id, "typing")
+
+        # تحميل الصوت من تيليجرام
+        file_info = bot.get_file(message.voice.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+
+        # تجهيز الملف بذاكرة الرام وإرساله لـ Groq
+        audio_stream = io.BytesIO(downloaded_file)
+        audio_stream.name = "voice.ogg"
+
+        transcription = groq_client.audio.transcriptions.create(
+            file=(audio_stream.name, audio_stream.read()),
+            model="whisper-large-v3",
+            prompt="محمد صلاح, كريم بنزيما, هالاند, زيدان, ميسي, رونالدو, ليفاندوفسكي, مبابي",
+            language="ar",
+        )
+
+        spoken_text = transcription.text.strip()
+
+        # إشعار اللاعب بما فهمه البوت
+        bot.reply_to(
+            message,
+            f"🎙️ <i>سمعتك تقول:</i> '<b>{spoken_text}</b>'",
+            parse_mode="HTML",
+        )
+
+        # تمرير النص المعالج لدالة التحقق
+        message.text = spoken_text
+        check_guess(message)
+
+    except Exception as e:
+        print(f"Error in voice recognition: {e}")
+        bot.reply_to(
+            message, "⚠️ حدث خطأ أثناء تحليل الصوت. حاول مرة أخرى أو اكتبه."
+        )
 
 
 @bot.message_handler(func=lambda msg: True)
@@ -282,14 +340,12 @@ def check_guess(message):
         hints_used = game["hint_index"] + 1
         earned_points = 4 - hints_used
 
-        # خصم نقطة إذا استعان بكشف الحرف الأول
         if game.get("letter_revealed"):
             earned_points -= 1
 
         if earned_points < 1:
             earned_points = 1
 
-        # تسجيل وتحديث ملف اللاعب
         if user_id not in scores:
             scores[user_id] = {
                 "name": message.from_user.first_name or "لاعب",
@@ -340,7 +396,6 @@ def check_guess(message):
         del games[chat_id]
 
     else:
-        # تقليل عدد المحاولات المتبقية
         game["attempts_left"] -= 1
 
         if game["attempts_left"] > 0:
@@ -367,5 +422,5 @@ def check_guess(message):
 
 
 if __name__ == "__main__":
-    print("Bot is fully upgraded and running...")
+    print("Bot with Voice AI is running...")
     bot.infinity_polling()
