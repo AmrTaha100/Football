@@ -43,12 +43,11 @@ def normalize_arabic(text):
     text = re.sub(r"[إأآا]", "ا", text)
     text = re.sub(r"ة", "ه", text)
     text = re.sub(r"ى", "ي", text)
-    text = re.sub(r"[^\w\s]", "", text)  # إزالة علامات الترقيم والرموز
+    text = re.sub(r"[^\w\s]", "", text)
     return text
 
 
 def get_game_markup():
-    """أزرار التحكم أثناء الجولة النشطة."""
     markup = InlineKeyboardMarkup()
     markup.row(
         InlineKeyboardButton("💡 تلميح إضافي", callback_data="next_hint"),
@@ -59,7 +58,6 @@ def get_game_markup():
 
 
 def get_next_game_markup():
-    """زر الانتقال المباشر للجولة التالية بعد الفوز أو الاستسلام."""
     markup = InlineKeyboardMarkup()
     markup.row(
         InlineKeyboardButton("⚽ لاعب جديد", callback_data="new_game")
@@ -87,8 +85,9 @@ def start_game(message):
 
     text = (
         f"⚽ <b>لعبة خمّن اللاعب!</b>\n\n"
-        f"<b>التلميح الأول (3 نقاط ⭐):</b>\n{player['hints'][0]}\n\n"
-        f"اكتب اسم اللاعب في رسالة أو اطلب تلميحاً إضافياً 👇"
+        f"🎯 <b>التحدي الأول (3 نقاط ⭐):</b>\n"
+        f"{player['hints'][0]}\n\n"
+        f"خمن اسمه في رسالة أو اطلب تلميحاً إضافياً بالأسفل 👇"
     )
     bot.send_message(
         message.chat.id, text, parse_mode="HTML", reply_markup=get_game_markup()
@@ -119,7 +118,6 @@ def show_leaderboard(message):
         bot.reply_to(message, "لا توجد نتائج مسجلة حتى الآن!")
         return
 
-    # ترتيب اللاعبين حسب النقاط تنازلياً
     sorted_players = sorted(
         scores.values(), key=lambda x: x.get("points", 0), reverse=True
     )[:5]
@@ -138,7 +136,6 @@ def show_leaderboard(message):
 def handle_callbacks(call):
     user_id = str(call.message.chat.id)
 
-    # السماح بزر 'لاعب جديد' بالعمل حتى لو كانت الجلسة منتهية
     if call.data == "new_game":
         bot.answer_callback_query(call.id)
         start_game(call.message)
@@ -201,7 +198,6 @@ def check_guess(message):
     user_guess = normalize_arabic(raw_guess)
     player = games[user_id]["player"]
 
-    # تجهيز جميع الصيغ الممكنة لاسم اللاعب وتوحيد حروفها
     full_name = normalize_arabic(player["name"])
     name_parts = full_name.split()
     aliases = [normalize_arabic(a) for a in player.get("aliases", [])]
@@ -216,12 +212,10 @@ def check_guess(message):
 
     if is_correct:
         hints_used = games[user_id]["hint_index"] + 1
-        # حساب النقاط بناءً على عدد التلميحات المستهلكة
         earned_points = 4 - hints_used
         if earned_points < 1:
             earned_points = 1
 
-        # تحديث بيانات اللاعب
         if user_id not in scores:
             scores[user_id] = {
                 "name": message.from_user.first_name or "لاعب",
@@ -255,7 +249,6 @@ def check_guess(message):
             f"📊 <b>إجمالي نقاطك:</b> {user_data['points']}{streak_text}\n\n"
             f"اضغط على الزر بالأسفل لجولة جديدة مباشرة 👇"
         )
-        # إرفاق زر "لاعب جديد" أسفل رسالة الفوز مباشرة
         bot.reply_to(
             message,
             response_text,
@@ -268,5 +261,5 @@ def check_guess(message):
 
 
 if __name__ == "__main__":
-    print("Bot is running with full features...")
+    print("Bot is running with enhanced hints...")
     bot.infinity_polling()
