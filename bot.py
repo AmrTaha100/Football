@@ -48,12 +48,22 @@ def normalize_arabic(text):
 
 
 def get_game_markup():
+    """أزرار التحكم أثناء الجولة النشطة."""
     markup = InlineKeyboardMarkup()
     markup.row(
         InlineKeyboardButton("💡 تلميح إضافي", callback_data="next_hint"),
         InlineKeyboardButton("🏳️ استسلام", callback_data="give_up"),
     )
     markup.row(InlineKeyboardButton("🔄 لاعب جديد", callback_data="new_game"))
+    return markup
+
+
+def get_next_game_markup():
+    """زر الانتقال المباشر للجولة التالية بعد الفوز أو الاستسلام."""
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("⚽ لاعب جديد", callback_data="new_game")
+    )
     return markup
 
 
@@ -127,9 +137,16 @@ def show_leaderboard(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     user_id = str(call.message.chat.id)
+
+    # السماح بزر 'لاعب جديد' بالعمل حتى لو كانت الجلسة منتهية
+    if call.data == "new_game":
+        bot.answer_callback_query(call.id)
+        start_game(call.message)
+        return
+
     if user_id not in games:
         bot.answer_callback_query(
-            call.id, "الجولة انتهت، اكتب /play لبدء جولة جديدة.", show_alert=True
+            call.id, "الجولة انتهت، اضغط لاعب جديد بالأسفل.", show_alert=True
         )
         return
 
@@ -161,15 +178,12 @@ def handle_callbacks(call):
 
         bot.send_message(
             int(user_id),
-            f"اللاعب كان: <b>{player['name']}</b> 😅\nانقطعت سلسلة الانتصارات!\nأرسل /play للتعويض.",
+            f"اللاعب كان: <b>{player['name']}</b> 😅\nانقطعت سلسلة الانتصارات!\nاضغط بالأسفل لجولة جديدة 👇",
             parse_mode="HTML",
+            reply_markup=get_next_game_markup(),
         )
         del games[user_id]
         bot.answer_callback_query(call.id)
-
-    elif call.data == "new_game":
-        bot.answer_callback_query(call.id)
-        start_game(call.message)
 
 
 @bot.message_handler(func=lambda msg: True)
@@ -178,7 +192,8 @@ def check_guess(message):
     if user_id not in games:
         bot.reply_to(
             message,
-            "اكتب /play لبدء اللعبة أو /top لمشاهدة المتصدرين!",
+            "لا توجد جولة نشطة حالياً! اضغط بالأسفل للبدء 👇",
+            reply_markup=get_next_game_markup(),
         )
         return
 
@@ -201,8 +216,8 @@ def check_guess(message):
 
     if is_correct:
         hints_used = games[user_id]["hint_index"] + 1
-        # حساب النقاط بناءً على عدد التلميحات
-        earned_points = 4 - hints_used  # 1 hint = 3 pts, 2 = 2 pts, 3 = 1 pt
+        # حساب النقاط بناءً على عدد التلميحات المستهلكة
+        earned_points = 4 - hints_used
         if earned_points < 1:
             earned_points = 1
 
@@ -238,9 +253,15 @@ def check_guess(message):
             f"اللاعب هو بالفعل <b>{player['name']}</b>\n\n"
             f"⭐ <b>النقاط المكتسبة:</b> +{earned_points}\n"
             f"📊 <b>إجمالي نقاطك:</b> {user_data['points']}{streak_text}\n\n"
-            f"اكتب /play لجولة جديدة أو /top للترتيب ⚽"
+            f"اضغط على الزر بالأسفل لجولة جديدة مباشرة 👇"
         )
-        bot.reply_to(message, response_text, parse_mode="HTML")
+        # إرفاق زر "لاعب جديد" أسفل رسالة الفوز مباشرة
+        bot.reply_to(
+            message,
+            response_text,
+            parse_mode="HTML",
+            reply_markup=get_next_game_markup(),
+        )
         del games[user_id]
     else:
         bot.reply_to(message, "❌ إجابة خاطئة! حاول مجدداً أو اطلب تلميحاً.")
