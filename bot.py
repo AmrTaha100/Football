@@ -32,12 +32,12 @@ def start_game(message):
     games[user_id] = {"player": player, "hint_index": 0}
 
     text = (
-        f"⚽ **لعبة خمّن اللاعب!**\n\n"
-        f"التلميح الأول:\n{player['hints'][0]}\n\n"
-        f"اكتب اسم اللاعب في الرسالة أو اطلب تلميحاً إضافياً:"
+        f"⚽ <b>لعبة خمّن اللاعب!</b>\n\n"
+        f"<b>التلميح الأول:</b>\n{player['hints'][0]}\n\n"
+        f"اكتب اسم اللاعب في رسالة أو اطلب تلميحاً إضافياً 👇"
     )
     bot.send_message(
-        user_id, text, parse_mode="Markdown", reply_markup=get_game_markup()
+        user_id, text, parse_mode="HTML", reply_markup=get_game_markup()
     )
 
 
@@ -57,7 +57,7 @@ def handle_callbacks(call):
         game["hint_index"] += 1
         if game["hint_index"] < len(player["hints"]):
             hint = player["hints"][game["hint_index"]]
-            bot.send_message(user_id, f"💡 تلميح: {hint}")
+            bot.send_message(user_id, f"💡 <b>تلميح:</b>\n{hint}", parse_mode="HTML")
         else:
             bot.send_message(
                 user_id, "⚠️ لا توجد تلميحات أخرى! حاول التخمين الآن."
@@ -66,7 +66,9 @@ def handle_callbacks(call):
 
     elif call.data == "give_up":
         bot.send_message(
-            user_id, f"اللاعب كان: **{player['name']}** 😅\nأرسل /play للعب مجدداً."
+            user_id,
+            f"اللاعب كان: <b>{player['name']}</b> 😅\nأرسل /play للعب مجدداً.",
+            parse_mode="HTML",
         )
         del games[user_id]
         bot.answer_callback_query(call.id)
@@ -86,19 +88,19 @@ def check_guess(message):
     user_guess = message.text.strip().lower()
     player = games[user_id]["player"]
 
-    # مطابقة الاسم الرسمي أو الأسماء البديلة
+    # فحص الاسم الرسمي والأسماء البديلة
     valid_names = [player["name"].lower()] + [
         a.lower() for a in player.get("aliases", [])
     ]
 
     if any(alias in user_guess for alias in valid_names):
         hints_used = games[user_id]["hint_index"] + 1
-        bot.reply_to(
-            message,
-            f"🎉 **إجابة صحيحة!** هو بالفعل **{player['name']}**!\n"
-            f"عرفته بعد {hints_used} تلميح.\n\n"
-            f"اكتب /play للعب جولة جديدة ⚽",
+        response_text = (
+            f"🎉 <b>إجابة صحيحة!</b> هو بالفعل <b>{player['name']}</b>!\n"
+            f"عرفته بعد <b>{hints_used}</b> تلميح.\n\n"
+            f"اكتب /play للعب جولة جديدة ⚽"
         )
+        bot.reply_to(message, response_text, parse_mode="HTML")
         del games[user_id]
     else:
         bot.reply_to(message, "❌ إجابة خاطئة! حاول مرة أخرى أو اطلب تلميحاً.")
