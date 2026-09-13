@@ -88,12 +88,21 @@ def check_guess(message):
     user_guess = message.text.strip().lower()
     player = games[user_id]["player"]
 
-    # فحص الاسم الرسمي والأسماء البديلة
-    valid_names = [player["name"].lower()] + [
-        a.lower() for a in player.get("aliases", [])
-    ]
+    # تجهيز الاسم الكامل، الألقاب، ومقاطع الاسم (الاسم الأول والأخير)
+    full_name = player["name"].lower()
+    name_parts = full_name.split()
+    aliases = [a.lower() for a in player.get("aliases", [])]
+    valid_names = set([full_name] + aliases + name_parts)
 
-    if any(alias in user_guess for alias in valid_names):
+    # التحقق من الإجابة في الاتجاهين
+    is_correct = False
+    if len(user_guess) >= 3:
+        for valid in valid_names:
+            if user_guess in valid or valid in user_guess:
+                is_correct = True
+                break
+
+    if is_correct:
         hints_used = games[user_id]["hint_index"] + 1
         response_text = (
             f"🎉 <b>إجابة صحيحة!</b> هو بالفعل <b>{player['name']}</b>!\n"
